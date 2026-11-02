@@ -5131,7 +5131,7 @@ if(space==='finance' && sub==='transactions') renderFinTx();
 
   /* ==================== Cloudflare Turnstile (CAPTCHA) ==================== */
   /* Paste your Turnstile Site Key below — this is the ONE place to edit it. */
-  var TURNSTILE_SITE_KEY = 'PASTE_YOUR_TURNSTILE_SITE_KEY_HERE';
+  var TURNSTILE_SITE_KEY = '0x4AAAAAAD-L2xLycDhpIvnh';
   var _tsWidgetId = null;
   function tsConfigured(){ return !!TURNSTILE_SITE_KEY && TURNSTILE_SITE_KEY.indexOf('PASTE')!==0; }
   /* One place decides whether a security-check token is needed and what to tell the user if it is not ready. */
