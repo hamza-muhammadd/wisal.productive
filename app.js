@@ -4871,6 +4871,8 @@ if(space==='finance' && sub==='transactions') renderFinTx();
  /* ===================== ACCOUNT: Supabase auth (backend step 1) ===================== */
  var SUPA_URL='https://uiiyumjnlcreqdzqierd.supabase.co';
  var SUPA_KEY='sb_publishable_XSYO_1rCHF1m_iE4A05pZw_r2crDZlS';
+ /* A password-reset email link lands here with #...type=recovery (or an error if it expired). Read it BEFORE supabase-js clears the hash. */
+ var _recoveryPending=/[#&?]type=recovery/.test((location.hash||'')+(location.search||'')), _linkExpired=/error_code=otp_expired|error=access_denied/.test(location.hash||'');
  var sb=null; try{ if(window.supabase && window.supabase.createClient){ sb=window.supabase.createClient(SUPA_URL,SUPA_KEY); } }catch(e){}
  var AUTH={user:null}, _authMode='in', _authFirstRun=false;
 
@@ -5129,10 +5131,17 @@ if(space==='finance' && sub==='transactions') renderFinTx();
 
   /* ==================== Cloudflare Turnstile (CAPTCHA) ==================== */
   /* Paste your Turnstile Site Key below — this is the ONE place to edit it. */
-  var TURNSTILE_SITE_KEY = '0x4AAAAAAD-L2xLycDhpIvnh';
+  var TURNSTILE_SITE_KEY = 'PASTE_YOUR_TURNSTILE_SITE_KEY_HERE';
   var _tsWidgetId = null;
+  function tsConfigured(){ return !!TURNSTILE_SITE_KEY && TURNSTILE_SITE_KEY.indexOf('PASTE')!==0; }
+  /* One place decides whether a security-check token is needed and what to tell the user if it is not ready. */
+  function tsNeed(){
+    if(!tsConfigured()){ try{ console.error('Wisal: TURNSTILE_SITE_KEY is not set, continuing without a CAPTCHA token'); }catch(e){} return {ok:true,token:''}; }
+    var tk=tsToken(); if(tk) return {ok:true,token:tk};
+    return {ok:false,token:'',msg: window.turnstile ? 'Please wait for the security check to finish (a tick appears), then try again.' : 'The security check could not load. Check your internet connection and refresh the page.'};
+  }
   function tsRender(){
-    if(!window.turnstile){ return; } /* api.js not ready yet — onloadTurnstileCallback re-calls when it is */
+    if(!window.turnstile||!tsConfigured()){ return; } /* api.js not ready yet — onloadTurnstileCallback re-calls when it is */
     var host=document.getElementById('authCaptcha'); if(!host) return;
     if(_tsWidgetId!==null){ try{ window.turnstile.reset(_tsWidgetId); }catch(e){} return; }
     try{ host.innerHTML=''; }catch(e){} /* never leave a stale widget behind */
@@ -5167,7 +5176,9 @@ if(space==='finance' && sub==='transactions') renderFinTx();
  var m=String((err&&err.message)||'').toLowerCase();
  if(m.indexOf('captcha')>=0||m.indexOf('timeout-or-duplicate')>=0) return 'The security check expired. It has been refreshed \u2014 wait for the tick, then try again.';
  if(m.indexOf('invalid email')>=0||m.indexOf('email address')>=0&&m.indexOf('invalid')>=0) return 'That email address doesn\u2019t look right \u2014 please check it.';
- if(m.indexOf('rate limit')>=0) return 'Too many sign-up emails just now. Try again in a few minutes, or turn off \u201cConfirm email\u201d in Supabase to skip emails entirely.';
+ if(m.indexOf('rate limit')>=0||m.indexOf('over_email_send_rate_limit')>=0||m.indexOf('too many')>=0||m.indexOf('security purposes')>=0) return 'Too many emails requested just now. Please wait a minute or two and try again.';
+ if(m.indexOf('different from the old')>=0||m.indexOf('same as the old')>=0) return 'Please choose a password you haven\u2019t used before.';
+ if(m.indexOf('session')>=0&&m.indexOf('missing')>=0) return 'This reset link has expired or was already used. Please request a new one.';
  if(m.indexOf('already registered')>=0||m.indexOf('already been registered')>=0||m.indexOf('user already')>=0) return 'That email already has an account, sign in instead.';
  if(m.indexOf('invalid login')>=0||m.indexOf('invalid credentials')>=0) return 'That email and password don\u2019t match.';
  if(m.indexOf('not confirmed')>=0) return 'Confirm your email first, check your inbox (and spam).';
@@ -5176,13 +5187,42 @@ if(space==='finance' && sub==='transactions') renderFinTx();
  return (err&&err.message)||'Something went wrong.';
  }
  function authErr(msg){ var e=document.getElementById('authErr'); if(e){ e.textContent=msg||''; e.hidden=!msg; } }
- function authBusy(on){ var b=document.getElementById('authGo'); if(b){ b.disabled=!!on; b.textContent=on?'Please wait\u2026':(_authMode==='in'?'Sign in':'Create account'); } }
+ function authBusy(on){ var b=document.getElementById('authGo'); if(b){ b.disabled=!!on; b.textContent=on?'Please wait\u2026':authModeLabel(_authMode); } }
+ function authModeLabel(m){ return m==='in'?'Sign in':m==='up'?'Create account':m==='forgot'?'Send reset link':'Save new password'; }
  function authSetMode(m){ _authMode=m;
- var t=document.getElementById('authTitle'), s=document.getElementById('authSwap'), g=document.getElementById('authGo');
- if(t) t.textContent=(m==='in')?'Welcome back':'Create your account';
- if(g) g.textContent=(m==='in')?'Sign in':'Create account';
- if(s) s.innerHTML=(m==='in')?'New to Wisal? <b>Create an account</b>':'Already have an account? <b>Sign in</b>';
+ var gid=function(id){ return document.getElementById(id); };
+ var TT={in:'Welcome back',up:'Create your account',forgot:'Reset your password',reset:'Choose a new password'};
+ var t=gid('authTitle'), s=gid('authSwap'), g=gid('authGo'), pw=gid('authPass'), p2=gid('authPass2'), n=gid('authNote');
+ if(t) t.textContent=TT[m]||TT['in'];
+ if(g){ g.textContent=authModeLabel(m); g.disabled=false; }
+ if(s){ s.hidden=(m==='forgot'||m==='reset'); s.innerHTML=(m==='in')?'New to Wisal? <b>Create an account</b>':'Already have an account? <b>Sign in</b>'; }
+ var show=function(id,on){ var el=gid(id); if(el) el.hidden=!on; };
+ show('authEmailFld',m!=='reset'); show('authPassFld',m!=='forgot'); show('authPass2Fld',m==='reset');
+ show('authForgot',m==='in'); show('authBack',m==='forgot'||m==='reset'); show('authCaptcha',m!=='reset');
+ var pl=gid('authPassLbl'); if(pl) pl.textContent=(m==='reset')?'New password':'Password';
+ if(pw){ pw.setAttribute('autocomplete',(m==='in')?'current-password':'new-password'); pw.type='password'; if(m==='reset'||m==='forgot') pw.value=''; }
+ if(p2){ p2.value=''; p2.type='password'; }
+ if(n&&m==='forgot') n.textContent='Enter the email you signed up with. We\u2019ll send a link to choose a new password.';
+ if(n&&m==='reset') n.textContent='Almost done \u2014 pick a new password for your account.';
  authErr('');
+ }
+ function authBackToSignIn(){
+ if(_authMode==='reset'){ _recoveryPending=false; try{ if(sb) sb.auth.signOut(); }catch(e){} }
+ authSetMode('in'); authShowResend(false);
+ var t=document.getElementById('authTitle'); if(t) t.textContent='Welcome to Wisal';
+ var n=document.getElementById('authNote'); if(n) n.textContent='Sign in or create your account to continue.';
+ }
+ function authEnterReset(){
+ try{ history.replaceState({},'',location.pathname); }catch(e){}
+ var a=document.getElementById('auth'), app=document.getElementById('app');
+ if(app) app.style.display='none'; if(a){ a.hidden=false; a.classList.add('is-on'); }
+ authSetMode('reset'); authShowResend(false);
+ setTimeout(function(){ var i=document.getElementById('authPass'); if(i&&i.focus){ try{ i.focus({preventScroll:true}); }catch(e){} } },60);
+ }
+ function authLinkExpired(){
+ try{ history.replaceState({},'',location.pathname); }catch(e){}
+ authSetMode('forgot');
+ var n=document.getElementById('authNote'); if(n) n.textContent='That reset link has expired or was already used. Enter your email and we\u2019ll send a fresh one.';
  }
   /* ==================== ONBOARDING (Phase 1) ==================== */
   var ONB_KEY='fw.onboarded';
@@ -5582,8 +5622,7 @@ if(space==='finance' && sub==='transactions') renderFinTx();
    if(!sb){ authErr('No connection.'); return; }
    var e=document.getElementById('authEmail'); var email=((e&&e.value)||'').trim();
    if(!email || email.indexOf('@')<1){ authErr('Enter your email first.'); return; }
-   var captchaToken=tsToken();
-   if(!captchaToken){ authErr('Please complete the CAPTCHA, then tap Resend.'); return; }
+   var _ts=tsNeed(); if(!_ts.ok){ authErr(_ts.msg); return; } var captchaToken=_ts.token;
    authErr(''); var b=document.getElementById('authResend'); if(b) b.disabled=true;
    sb.auth.resend({ type:'signup', email:email, options:{ captchaToken:captchaToken, emailRedirectTo:location.origin } }).then(function(res){
      if(b) b.disabled=false; tsReset();
@@ -5592,13 +5631,14 @@ if(space==='finance' && sub==='transactions') renderFinTx();
    }).catch(function(){ if(b) b.disabled=false; tsReset(); authErr('Could not resend, please try again.'); });
  }
  function doAuth(){
- if(!sb){ authErr('No connection, connect to the internet and try again, or continue offline below.'); return; }
+if(!sb){ authErr('No connection, connect to the internet and try again, or continue offline below.'); return; }
+if(_authMode==='forgot'){ doForgot(); return; }
+if(_authMode==='reset'){ doReset(); return; }
  var e=document.getElementById('authEmail'), p=document.getElementById('authPass');
  var email=((e&&e.value)||'').trim(), pass=(p&&p.value)||'';
  if(!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email)){ authErr('Please enter a valid email \u2014 check for a missing dot, e.g. name@gmail.com'); return; }
  if(!pass || pass.length<6){ authErr('Password needs at least 6 characters.'); return; }
- var captchaToken=tsToken();
- if(!captchaToken){ authErr('Please wait for the CAPTCHA to finish, then try again.'); return; }
+ var _ts=tsNeed(); if(!_ts.ok){ authErr(_ts.msg); return; } var captchaToken=_ts.token;
  tsReset(); /* single-use token: retire it now and start a fresh one */
  authErr(''); authBusy(true);
  var call=(_authMode==='in') ? sb.auth.signInWithPassword({email:email,password:pass,options:{captchaToken:captchaToken}}) : sb.auth.signUp({email:email,password:pass,options:{captchaToken:captchaToken,emailRedirectTo:location.origin}});
@@ -5609,7 +5649,7 @@ if(space==='finance' && sub==='transactions') renderFinTx();
  if(_authMode==='up' && !sess){
  var t=document.getElementById('authTitle'); if(t) t.textContent='Check your email';
  var n=document.getElementById('authNote'); if(n) n.textContent='We sent a confirmation link to '+email+'. Tap it, then come back and sign in \u2014 check your spam folder too.';
- tsReset(); authSetMode('in'); authShowResend(true); return;
+ tsReset(); authSetMode('in'); if(t) t.textContent='Check your email'; if(n) n.textContent='We sent a confirmation link to '+email+'. Tap it, then come back and sign in \u2014 check your spam folder too.'; authShowResend(true); return;
  }
  var _newUid=(user&&user.id)||'';
    var _prevUid=Store.get('fw.auth.uid','');
@@ -5625,6 +5665,41 @@ if(space==='finance' && sub==='transactions') renderFinTx();
    try{ if(!onbDone() && !FD.data.members.length){ onbMaybeStart(); } else if(!Store.get('fw.spaces.chosen',false) && !FD.data.members.length){ openSpPick(true); } }catch(e){}
    if(typeof flash==='function') flash('Signed in, welcome!');
  }).catch(function(){ authBusy(false); authErr('Network error, please try again.'); tsReset(); });
+ }
+ function doForgot(){
+ var e=document.getElementById('authEmail'); var email=((e&&e.value)||'').trim();
+ if(!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email)){ authErr('Please enter the email you signed up with, e.g. name@gmail.com'); return; }
+ var _ts=tsNeed(); if(!_ts.ok){ authErr(_ts.msg); return; }
+ tsReset(); authErr(''); authBusy(true);
+ sb.auth.resetPasswordForEmail(email,{ redirectTo:location.origin, captchaToken:_ts.token }).then(function(res){
+ authBusy(false);
+ if(res&&res.error){ authErr(authFriendly(res.error)); tsReset(); return; }
+ var t=document.getElementById('authTitle'); if(t) t.textContent='Check your email';
+ var n=document.getElementById('authNote'); if(n) n.textContent='If an account exists for '+email+', we\u2019ve sent a link to reset your password. Open it on this device. Check your spam folder too.';
+ var g=document.getElementById('authGo'); if(g) g.textContent='Send again';
+ tsReset();
+ }).catch(function(){ authBusy(false); authErr('Network error, please try again.'); tsReset(); });
+ }
+ function doReset(){
+ var p=document.getElementById('authPass'), p2=document.getElementById('authPass2');
+ var pass=(p&&p.value)||'', pass2=(p2&&p2.value)||'';
+ if(pass.length<6){ authErr('Password needs at least 6 characters.'); return; }
+ if(pass!==pass2){ authErr('The two passwords don\u2019t match.'); return; }
+ authErr(''); authBusy(true);
+ sb.auth.updateUser({password:pass}).then(function(res){
+ authBusy(false);
+ if(res&&res.error){ authErr(authFriendly(res.error)); return; }
+ var user=(res.data&&res.data.user)||null;
+ _recoveryPending=false;
+ var _newUid=(user&&user.id)||''; var _prevUid=Store.get('fw.auth.uid','');
+ if(_newUid&&_prevUid&&_newUid!==_prevUid){ try{ wipeLocalData(); }catch(e){} }
+ AUTH.user=user||AUTH.user; authRemember(AUTH.user); Store.set('fw.auth.mode','cloud');
+ renderAccountCard(); renderHouseholdCard();
+ try{ cloudPull(); }catch(e){} try{ wisalSyncPlan(); }catch(e){}
+ try{ hideAuthGate(); }catch(e){}
+ try{ if(!onbDone() && !FD.data.members.length){ onbMaybeStart(); } }catch(e){}
+ if(typeof flash==='function') flash('Password updated \u2014 you\u2019re signed in.');
+ }).catch(function(){ authBusy(false); authErr('Network error, please try again.'); });
  }
  function acctDelete(){
  if(!AUTH.user){ flash('Sign in first'); return; }
@@ -5711,8 +5786,8 @@ if(space==='finance' && sub==='transactions') renderFinTx();
    try{ showAuthGate(); }catch(e){}   // gate appears instantly; hidden only once a valid session is confirmed
    if(!sb){ renderAccountCard(); renderHouseholdCard(); return; }
    try{
-     sb.auth.getSession().then(function(r){ var s=r&&r.data&&r.data.session; if(s&&s.user){ AUTH.user=s.user; authRemember(s.user); Store.set('fw.auth.mode','cloud'); try{ hideAuthGate(); }catch(e){} try{ cloudPull(); }catch(e){} } else { AUTH.user=null; authRemember(null); try{ wipeLocalData(); }catch(e){} try{ showAuthGate(); }catch(e){} } renderAccountCard(); renderHouseholdCard(); chRefreshView(); }).catch(function(){ try{ showAuthGate(); }catch(e){} renderAccountCard(); renderHouseholdCard(); chRefreshView(); });
- sb.auth.onAuthStateChange(function(ev,session){ if(session&&session.user){ AUTH.user=session.user; authRemember(session.user); try{ hideAuthGate(); }catch(e){} try{ authCleanUrl(); }catch(e){} } else if(ev==='SIGNED_OUT'){ AUTH.user=null; authRemember(null); try{ wipeLocalData(); }catch(e){} try{ showAuthGate(); }catch(e){} } renderAccountCard(); renderHouseholdCard(); _chLoaded=false; _chSub=null; chRefreshView(); });
+     sb.auth.getSession().then(function(r){ var s=r&&r.data&&r.data.session; if(s&&s.user&&_recoveryPending){ authEnterReset(); } else if(s&&s.user){ AUTH.user=s.user; authRemember(s.user); Store.set('fw.auth.mode','cloud'); try{ hideAuthGate(); }catch(e){} try{ cloudPull(); }catch(e){} } else { AUTH.user=null; authRemember(null); try{ wipeLocalData(); }catch(e){} try{ showAuthGate(); }catch(e){} if(_linkExpired){ try{ authLinkExpired(); }catch(e){} } } renderAccountCard(); renderHouseholdCard(); chRefreshView(); }).catch(function(){ try{ showAuthGate(); }catch(e){} renderAccountCard(); renderHouseholdCard(); chRefreshView(); });
+ sb.auth.onAuthStateChange(function(ev,session){ if(ev==='PASSWORD_RECOVERY'){ _recoveryPending=true; try{ authEnterReset(); }catch(e){} } else if(session&&session.user&&_recoveryPending){ /* stay locked until a new password is saved */ } else if(session&&session.user){ AUTH.user=session.user; authRemember(session.user); try{ hideAuthGate(); }catch(e){} try{ authCleanUrl(); }catch(e){} } else if(ev==='SIGNED_OUT'){ AUTH.user=null; authRemember(null); try{ wipeLocalData(); }catch(e){} try{ showAuthGate(); }catch(e){} } renderAccountCard(); renderHouseholdCard(); _chLoaded=false; _chSub=null; chRefreshView(); });
  }catch(e){ renderAccountCard(); renderHouseholdCard(); }
  }
  /* After an email-confirmation / magic link, Supabase returns tokens in the URL.
@@ -5787,7 +5862,7 @@ if(space==='finance' && sub==='transactions') renderFinTx();
    // is present at all, fall back to showing the gate so nothing private renders.
    if(!sb){ try{ showAuthGate(); }catch(e){} return; }
  }
- (function(){ var p=document.getElementById('authPass'); if(p&&p.addEventListener) p.addEventListener('keydown',function(ev){ if(ev.key==='Enter'){ ev.preventDefault(); doAuth(); } }); })();
+ (function(){ ['authEmail','authPass','authPass2'].forEach(function(id){ var p=document.getElementById(id); if(p&&p.addEventListener) p.addEventListener('keydown',function(ev){ if(ev.key==='Enter'){ ev.preventDefault(); doAuth(); } }); }); })();
 
  /* ===================== CLOUD SYNC (backend step 2) ===================== */
  var _pushT=null, _pulling=false;
@@ -7630,7 +7705,7 @@ if(space==='finance' && sub==='transactions') renderFinTx();
  sb.rpc('join_household',{code:code})
  .then(function(r){
  if(r.error){ var m=String(r.error.message||''); flash(m.indexOf('own_code')>=0?'That\u2019s your own code':'Code not found, check it and try again'); syncStatus('up to date'); return null; }
- var hid=r.data; if(!hid){ flash('Code not found, check it and try again'); syncStatus('up to date'); return null; }
+ var hid=r.data; if(!hid) return null;
  Store.set('fw.sync.row', hid); Store.set('fw.sync.ts','');
  return sb.from('family_data').select('user_id,data,updated_at').eq('user_id',hid).maybeSingle();
  })
@@ -9933,6 +10008,9 @@ if(space==='finance' && sub==='transactions') renderFinTx();
  if(e.target.closest('#authGo')){ doAuth(); return; }
  if(e.target.closest('[data-auth-toggle]')){ authSetMode(_authMode==='in'?'up':'in'); try{ authShowResend(false); }catch(e){} return; }
  if(e.target.closest('[data-auth-resend]')){ authResend(); return; }
+ if(e.target.closest('[data-auth-forgot]')){ authSetMode('forgot'); try{ authShowResend(false); }catch(e){} var _fe=document.getElementById('authEmail'); if(_fe&&_fe.focus){ try{ _fe.focus({preventScroll:true}); }catch(e2){} } return; }
+ if(e.target.closest('[data-auth-back]')){ authBackToSignIn(); return; }
+ if(e.target.closest('[data-auth-eye]')){ var _b=e.target.closest('[data-auth-eye]'), _pw=document.getElementById('authPass'), _p2=document.getElementById('authPass2'), _on=_pw&&_pw.type==='password'; if(_pw) _pw.type=_on?'text':'password'; if(_p2) _p2.type=_on?'text':'password'; _b.setAttribute('aria-label',_on?'Hide password':'Show password'); _b.classList.toggle('is-on',!!_on); return; }
  var _av=e.target.closest('[data-av]'); if(_av){ avSet(_av.getAttribute('data-av')); return; }
  if(e.target.closest('[data-action="av-photo"]')){ avPickPhoto(); return; }
  if(e.target.closest('[data-action="av-photo-rm"]')){ avClearPhoto(); return; }
