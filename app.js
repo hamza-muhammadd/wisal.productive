@@ -7705,7 +7705,7 @@ if(_authMode==='reset'){ doReset(); return; }
  sb.rpc('join_household',{code:code})
  .then(function(r){
  if(r.error){ var m=String(r.error.message||''); flash(m.indexOf('own_code')>=0?'That\u2019s your own code':'Code not found, check it and try again'); syncStatus('up to date'); return null; }
- var hid=r.data; if(!hid) return null;
+ var hid=r.data; if(!hid){ flash('Code not found, check it and try again'); syncStatus('up to date'); return null; }
  Store.set('fw.sync.row', hid); Store.set('fw.sync.ts','');
  return sb.from('family_data').select('user_id,data,updated_at').eq('user_id',hid).maybeSingle();
  })
